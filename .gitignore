@@ -17,3 +17,6 @@
 configure.wrf*
 *.backup
 *.f90
+
+# Julia files to ignore
+/Manifest.toml
