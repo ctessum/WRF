@@ -3,6 +3,9 @@ uuid = "9ab1bf33-e62d-4377-bd19-47435203110f"
 authors = ["WRF contributors"]
 version = "0.1.0"
 
+[deps]
+NetCDF = "30363a11-5582-574a-97bb-aa9a979735b9"
+
 [compat]
 julia = "1"
 
