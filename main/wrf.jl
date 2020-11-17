@@ -28,7 +28,8 @@ ccall((:__module_wrf_top_MOD_wrf_init, "libwrf"), Cvoid, ())
 ccall((:__module_wrf_top_MOD_wrf_dfi, "libwrf"), Cvoid, ())
 
 # WRF model time-stepping.  Calls integrate().
-ccall((:__module_wrf_top_MOD_wrf_run, "libwrf"), Cvoid, ())
+include(joinpath(@__DIR__, "module_wrf_top_wrf_run.jl"))
+# ccall((:__module_wrf_top_MOD_wrf_run, "libwrf"), Cvoid, ())
 
 # WRF model clean-up.  This calls MPI_FINALIZE() for DM parallel runs.  
 # ccall((:__module_wrf_top_MOD_wrf_finalize, "libwrf"), Cvoid, ()) # Don't call unless we want to exit session.
