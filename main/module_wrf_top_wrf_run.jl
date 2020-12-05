@@ -15,12 +15,11 @@
 # The forecast integration for the most coarse grid is now started.  The
 # integration is from the first step (1) to the last step of the simulation.
 
-head_grid_ptr = cglobal((:__module_domain_MOD_head_grid, "libwrf"), Int32)
+head_grid_ptr = cglobal((:__module_domain_MOD_head_grid, "libwrf"), Any)
 
-# ccall((:__module_wrf_top_MOD_wrf_run, "libwrf"), Cvoid, ())
 ccall((:wrf_debug_, "libwrf"), Cvoid, (Ref{Int32}, Cstring), 100 , "wrf: calling integrate")
 
-ccall((:__module_integrate_MOD_integrate, "libwrf"), Cvoid, (Ptr{Int32}, ), head_grid_ptr)
+#ccall((:__module_integrate_MOD_integrate, "libwrf"), Cvoid, (Ptr{Any}, ), head_grid_ptr)
+include(joinpath(@__DIR__, "../frame/module_integrate.jl"))
 
-
-#  CALL       wrf_debug ( 100 , 'wrf: back from integrate' )
+ccall((:wrf_debug_, "libwrf"), Cvoid, (Ref{Int32}, Cstring), 100 , "wrf: back from integrate")

@@ -15,9 +15,6 @@
 
    #  Input data.
 
-grid = cglobal((:__module_domain_MOD_head_grid, "libwrf"), Any)
-grid_id = 1
-
 # module_integrate:integrate
 # <DESCRIPTION> 
 # This is a driver-level routine that controls the integration of a
@@ -135,6 +132,33 @@ grid_id = 1
 # There is logic here to make sure this occurs correctly on a nest, since the nest may finish before its parent.
 # </DESCRIPTION>
 
+struct fieldlist
+    VarName::Array{Cuchar,80}     
+    Type::Array{Cuchar,1}      
+    ProcOrient::Array{Cuchar,1}        
+    DataName::Array{Cuchar,80}     
+    Description::Array{Cuchar,80}     
+    Units::Array{Cuchar,80}     
+    MemoryOrder::Array{Cuchar,10}     
+    Stagger::Array{Cuchar,10}     
+    dimname1::Array{Cuchar,80}     
+    dimname2::Array{Cuchar,80}     
+    dimname3::Array{Cuchar,80}     
+    scalar_array::Bool 
+    boundary_array::Bool 
+    restart::Bool 
+end
+
+struct domain
+    head_statevars::Ptr{fieldlist}
+    tail_statevars::Ptr{fieldlist}
+end
+
+# head_ptr = unsafe_load(unsafe_load(grid)).head_statevars
+
+# println("aslfjalsdfjlkasjflsj " , unsafe_load(head_ptr))
+
+
    #  Local data.
 
 #   CHARACTER*32                           :: outname, rstname
@@ -152,178 +176,196 @@ grid_id = 1
 #   INTEGER                                :: idum1 , idum2 , ierr , open_status
 #   LOGICAL                                :: should_do_last_io
 #   LOGICAL                                :: may_have_moved
+nestid = Int32(0)
+kid = Int32(0)
+grid_active_this_task = true
+config_flags = Ref{Any}(0)
+new_nest = Ref{Ref{Any}}(0)
 
+grid_ptr = cglobal((:__module_domain_MOD_head_grid, "libwrf"), Ptr{domain})
+grid_id = Int32(1)
 
+grid = unsafe_load(grid_ptr)
 
    # This allows us to reference the current grid from anywhere beneath 
    # this point for debugging purposes.  
-ccall((:__module_domain_MOD_set_current_grid_ptr, "libwrf"), Cvoid, (Ptr{Any},), grid)
-   # CALL set_current_grid_ptr( grid )
-ccall((:push_communicators_for_domain_, "libwrf"), Cvoid, (Int32,), grid_id)
+ccall((:__module_domain_MOD_set_current_grid_ptr, "libwrf"), Cvoid, (Ptr{Ptr{domain}},), grid_ptr)
+ccall((:push_communicators_for_domain_, "libwrf"), Cvoid, (Ref{Int32},), Ref(grid_id))
    # CALL push_communicators_for_domain( grid%id )
 
-if !ccall((:__module_domain_MOD_domain_clockisstoptime, "libwrf"), bool, (Ptr{Any},), grid)
-    model_config_rec = cglobal((:__module_configure_MOD_model_config_rec, "libwrf"), Ptr{Any})
-    config_flags = Ref{Any}
-    @ccall libwrf.__module_configure_MOD_model_to_grid_config_rec(grid_id::Int32, model_config_rec::Ptr{Any}, config_flags::Ptr{Any})::Cvoid
+if ! ccall((:__module_domain_MOD_domain_clockisstoptime, "libwrf"), Bool, (Ptr{domain},), grid)
+    model_config_rec = cglobal((:__module_configure_MOD_model_config_rec, "libwrf"), Ptr{Cvoid})
+    ccall((:__module_configure_MOD_model_to_grid_config_rec, "libwrf"), Cvoid, (Ref{Int32}, 
+            Ptr{Cvoid}, Ptr{Cvoid}), Ref(grid_id), model_config_rec, config_flags)
+
     config_flags_grid_allowed = true
     if config_flags_grid_allowed
-        #@ccall libwrf.__module_domain_MOD_domain_clockprint(150, grid, "DEBUG:  top of integrate(),")
+        local str = "DEBUG:  top of integrate(),"
+        ccall((:__module_domain_MOD_domain_clockprint, "libwrf"), Cvoid, (Ref{Int32}, Ptr{domain}, Ptr{UInt8}, Csize_t), 
+                Ref(Int32(150)), grid, str, sizeof(str))
 
-        while ! @ccall libwrf.__module_domain_MOD_domain_clockisstopsubtime(grid::Ptr{Any})::bool
-            if @ccall wrf_dm_on_monitor_()::bool 
-                grid_active_this_task = true
+        while !ccall((:__module_domain_MOD_domain_clockisstopsubtime, "libwrf"), Bool, (Ptr{domain},), grid)
+
+            if ccall((:wrf_dm_on_monitor_, "libwrf"), Bool, ())
                 if grid_active_this_task
-                    @ccall libwrf.__module_timing_MOD_start_timing()::Cvoid
+                    ccall((:__module_timing_MOD_start_timing, "libwrf"), Cvoid, ())
                 end
             end
-            @ccall libwrf.med_setup_step_(grid::Ptr{Any}, config_flags::Ptr{Any})::Cvoid
+
+            ccall((:med_setup_step_, "libwrf"), Cvoid, (Ptr{domain}, Ptr{Cvoid}), grid, config_flags)
             a_nest_was_opened = false
             # for each nest whose time has come...
-            while @ccall libwrf.__module_nesting_MOD_nests_to_open(grid, nestid, kid)::bool
-               # nestid is index into model_config_rec (module_configure) of the grid
+            while ccall((:__module_nesting_MOD_nests_to_open, "libwrf"), Bool, (Ptr{domain}, Ref{Int32}, Ref{Int32}), grid, Ref(nestid), Ref(kid))
+                # nestid is index into model_config_rec (module_configure) of the grid
                # to be opened; kid is index into an open slot in grid's list of children
                 a_nest_was_opened = true
-                @ccall libwrf.med_pre_nest_initial_(grid, nestid, config_flags)
+                @ccall libwrf.med_pre_nest_initial_(grid::Ptr{Cvoid}, Ref(nestid)::Ref{Int32}, config_flags::Ptr{Cvoid})::Cvoid
                 active_this_task = true
-                @ccall libwrf.__module_domain_MOD_alloc_and_configure_domain(nestid, active_this_task, new_nest,  grid, kid)
-                @ccall libwrf.setup_timekeeping_(new_nest)
-                @ccall libwrf.med_nest_initial_(grid, new_nest, config_flags)
+                ccall((:__module_domain_MOD_alloc_and_configure_domain, "libwrf"), Cvoid, (Ref{Int32}, Ref{Bool}, Ptr{Ptr{domain}}, Ptr{Ptr{domain}}, Ref{Int32}), 
+                            Ref(nestid), Ref(active_this_task), new_nest,  grid_ptr, Ref(kid))
+                ccall((:setup_timekeeping_, "libwrf"), Cvoid, (Ref{Ref{Any}},), new_nest)
+                ccall((:med_nest_initial_, "libwrf"), Cvoid, (Ptr{Ptr{Cvoid}}, Ref{Ref{Int32}}, Ptr{Cvoid}), grid_ptr, new_nest, config_flags)
                 if grid_active_this_task 
                     if grid % dfi_stage == DFI_STARTFWD
-                        @ccall wrf_dfi_startfwd_init(new_nest)
+                        ccall((:wrf_dfi_startfwd_init_, "libwrf"), Cvoid, (Ref{Ref{Int32}},), new_nest)
                     end
                     if coupler_on
-                        @ccall cpl_defdomain(new_nest) 
+                        ccall((:cpl_defdomain, "libwrf"), Cvoid, (Ref{Ref{Int32}},), new_nest)
                     end
                 end # active_this_task
             end
             if a_nest_was_opened
-                @ccall set_overlaps(grid)   # find overlapping and set pointers
+                ccall((:__module_nesting_MOD_set_overlaps, "libwrf"), Cvoid, (Ptr{domain},), grid)   # find overlapping and set pointers
             end
 
             if grid_active_this_task
             # Accumulation calculation for DFI
-                @ccall dfi_accumulate ( grid )
+                ccall((:dfi_accumulate_, "libwrf"), Cvoid, (Ref{Ptr{domain}},), Ref(grid))
             end # active_this_task
 
             if grid_active_this_task
-                @ccall med_before_solve_io (grid, config_flags)
+                ccall((:med_before_solve_io_, "libwrf"), Cvoid, (Ptr{domain}, Ptr{Cvoid}), grid, config_flags)
             end # active_this_task
 
-            grid_ptr => grid
-            while ASSOCIATED(grid_ptr) 
+            # grid_ptr => grid
+            # while ASSOCIATED(grid_ptr) 
 
-                if grid_ptr % active_this_task
-                    @ccall set_current_grid_ptr(grid_ptr)
-                    @ccall wrf_debug(100, "module_integrate: calling solve interface ")
 
-                    @ccall solve_interface ( grid_ptr ) 
+            #    if grid_ptr % active_this_task
+                   # ccall((:__module_domain_MOD_set_current_grid_ptr, "libwrf"), Cvoid, (Ptr{Ptr{domain}},), grid_ptr)
+                    # @ccall wrf_debug(100, "module_integrate: calling solve interface ")
 
-                end
-                @ccall domain_clockadvance ( grid_ptr )
-                @ccall wrf_debug(100, "module_integrate: back from solve interface ")
+            ccall((:solve_interface_, "libwrf"), Cvoid, (Ptr{domain},), grid) 
+
+            #    end
+            ccall((:__module_domain_MOD_domain_clockadvance, "libwrf"), Cvoid, (Ptr{domain},), grid)
+
+                # @ccall wrf_debug(100, "module_integrate: back from solve interface ")
                # print lots of time-related information for testing
                # switch this on with namelist variable self_test_domain
-                @ccall domain_time_test(grid_ptr, "domain_clockadvance")
-                grid_ptr => grid_ptr % sibling
-            end # DO
-            @ccall set_current_grid_ptr(grid)
-            @ccall med_calc_model_time (grid, config_flags)
-            if grid % active_this_task 
-                @ccall med_after_solve_io (grid, config_flags)
-            end
+            str = "domain_clockadvance"
+            ccall((:__module_domain_MOD_domain_time_test, "libwrf"), Cvoid, (Ptr{domain}, Ptr{UInt8}, Csize_t), grid, str, sizeof(str))
+          
+                #    grid_ptr => grid_ptr % sibling
+            # end # DO
+            # ccall((:__module_domain_MOD_set_current_grid_ptr, "libwrf"), Cvoid, (Ptr{Ptr{domain}},), grid_ptr)
+            ccall((:med_calc_model_time_, "libwrf"), Cvoid, (Ptr{domain}, Ptr{Cvoid}), grid, config_flags)
+            # if grid % active_this_task 
+            ccall((:med_after_solve_io_,  "libwrf"), Cvoid, (Ptr{domain}, Ptr{Cvoid}), grid, config_flags)
+            # end
 
-            grid_ptr => grid
-            while ( ASSOCIATED(grid_ptr) )
-                for kid = 1:max_nests
-                    if ASSOCIATED(grid_ptr % nests(kid) % ptr) 
-                        @ccall set_current_grid_ptr(grid_ptr % nests(kid) % ptr)
-                   # Recursive -- advance nests from previous time level to this time level.
-                        @ccall wrf_debug(100, "module_integrate: calling med_nest_force ")
-                        @ccall med_nest_force (grid_ptr, grid_ptr % nests(kid) % ptr)
-                        @ccall wrf_debug(100, "module_integrate: back from med_nest_force ")
-                        grid_ptr % nests(kid) % ptr % start_subtime = domain_get_current_time(grid) - domain_get_time_step(grid)
-                        grid_ptr % nests(kid) % ptr % stop_subtime = domain_get_current_time(grid)
-                    end
-                end # DO
 
-                for kid = 1:max_nests
-                    if ASSOCIATED(grid_ptr % nests(kid) % ptr) 
-                        @ccall set_current_grid_ptr(grid_ptr % nests(kid) % ptr)
-                        WRITE(message, *)grid % id, " module_integrate: recursive call to integrate "
-                        @ccall wrf_debug(100, message)
-                        @ccall integrate ( grid_ptr % nests(kid) % ptr ) 
-                        WRITE(message, *)grid % id, " module_integrate: back from recursive call to integrate "
-                        @ccall wrf_debug(100, message)
-                    end
-                end # DO
-                may_have_moved = false
-                for kid = 1:max_nests
-                    if ASSOCIATED(grid_ptr % nests(kid) % ptr)
-                        @ccall set_current_grid_ptr(grid_ptr % nests(kid) % ptr)
-                        if ! ( domain_clockisstoptime(head_grid) || domain_clockisstoptime(grid) ||  domain_clockisstoptime(grid_ptr % nests(kid) % ptr) )
-                            @ccall wrf_debug(100, "module_integrate: calling med_nest_feedback ")
-                            @ccall med_nest_feedback (grid_ptr, grid_ptr % nests(kid) % ptr, config_flags)
-                            @ccall wrf_debug(100, "module_integrate: back from med_nest_feedback ")
-                        end
+            # grid_ptr => grid
+            # while ( ASSOCIATED(grid_ptr) )
+            #    for kid = 1:max_nests
+            #        if ASSOCIATED(grid_ptr % nests(kid) % ptr) 
+            #            ccall((:__module_domain_MOD_set_current_grid_ptr, "libwrf"), Cvoid, (Ptr{Ptr{domain}},), grid_ptr % nests(kid) % ptr)
+                        # Recursive -- advance nests from previous time level to this time level.
+                        # @ccall wrf_debug(100, "module_integrate: calling med_nest_force ")
+            #            ccall((:med_nest_force_, "libwrf"), Cvoid, (Ptr{Ptr{domain}}, Ptr{Ptr{domain}}), grid_ptr, grid_ptr % nests(kid) % ptr)
+                        # @ccall wrf_debug(100, "module_integrate: back from med_nest_force ")
+                        # grid_ptr % nests(kid) % ptr % start_subtime = domain_get_current_time(grid) - domain_get_time_step(grid)
+                        # grid_ptr % nests(kid) % ptr % stop_subtime = domain_get_current_time(grid)
+            #        end
+            #    end # DO
 
-                    end 
-                end
+                # for kid = 1:max_nests
+                #    if ASSOCIATED(grid_ptr % nests(kid) % ptr) 
+                #        @ccall set_current_grid_ptr(grid_ptr % nests(kid) % ptr)
+                #        WRITE(message, *)grid % id, " module_integrate: recursive call to integrate "
+                #        @ccall wrf_debug(100, message)
+                #        @ccall integrate ( grid_ptr % nests(kid) % ptr ) 
+                #        WRITE(message, *)grid % id, " module_integrate: back from recursive call to integrate "
+                #        @ccall wrf_debug(100, message)
+                #    end
+                # end # DO
+            #    may_have_moved = false
+                # for kid = 1:max_nests
+                #    if ASSOCIATED(grid_ptr % nests(kid) % ptr)
+                #        @ccall set_current_grid_ptr(grid_ptr % nests(kid) % ptr)
+                #        if ! ( domain_clockisstoptime(head_grid) || domain_clockisstoptime(grid) ||  domain_clockisstoptime(grid_ptr % nests(kid) % ptr) )
+                #            @ccall wrf_debug(100, "module_integrate: calling med_nest_feedback ")
+                #            @ccall med_nest_feedback (grid_ptr, grid_ptr % nests(kid) % ptr, config_flags)
+                #            @ccall wrf_debug(100, "module_integrate: back from med_nest_feedback ")
+                #        end
 
-                if coupler_on 
-                    @ccall cpl_snd(grid_ptr) 
-                end
-                grid_ptr => grid_ptr % sibling
-            end
-            @ccall set_current_grid_ptr(grid)
+                #    end     
+                # end
+
+                # if coupler_on 
+                #    @ccall cpl_snd(grid_ptr) 
+                # end
+            #    grid_ptr => grid_ptr % sibling
+            # end
+            # ccall((:__module_domain_MOD_set_current_grid_ptr, "libwrf"), Cvoid, (Ptr{Ptr{domain}},), grid_ptr)
             #  Report on the timing for a single time step.
-            if wrf_dm_on_monitor() 
+            if ccall((:wrf_dm_on_monitor_, "libwrf"), Bool, ())
                 if grid_active_this_task
-                    @ccall domain_clock_get (grid, current_timestr = message2)
+                    message2 = "XXXXXXXXXX" # ' '^255
+                    # ccall((:__module_domain_MOD_domain_clock_get, "libwrf"), Cvoid, (Ptr{domain}, Ref{Any}, Ptr{UInt8}, Csize_t), 
+                    #            grid, Ref{Any}(0), message2, sizeof(message2))
 
-               # if config_flags%use_adaptive_time_step then
-               #   WRITE ( message , FMT = '("main (dt=",F6.2,"): time ",A," on domain ",I3)' ) grid%dt, TRIM(message2), grid%id
-               # else
-               #   WRITE ( message , FMT = '("main: time ",A," on domain ",I3)' ) TRIM(message2), grid%id
-               # end
-                    @ccall end_timing ( TRIM(message) )
+                # if config_flags%use_adaptive_time_step then
+                #  WRITE ( message , FMT = '("main (dt=",F6.2,"): time ",A," on domain ",I3)' ) grid%dt, TRIM(message2), grid%id
+                # else
+                    message = "(main: time $message2 on domain $grid_id )"
+                # end
+                    ccall((:__module_timing_MOD_end_timing, "libwrf"), Cvoid, (Ptr{UInt8}, Csize_t), message, sizeof(message))
                 end # active_this_task
             end
-            @ccall med_endup_step (grid, config_flags)
+            ccall((:med_endup_step_, "libwrf"), Cvoid, (Ptr{domain}, Ptr{Cvoid}), grid, config_flags)
         end # DO
 
         if grid_active_this_task
          # Accumulation calculation for DFI
-            @ccall dfi_accumulate ( grid )
+            ccall((:dfi_accumulate_, "libwrf"), Cvoid, (Ref{Ptr{domain}},), Ref(grid))
         end # active_this_task
-
 
 
          # Avoid double writes on nests if this is not really the last time;
          # Do check for write if the parent domain is ending.
-        if grid_id == 1                # head_grid
+         if grid_id == 1                # head_grid
             if grid_active_this_task
-                @ccall med_last_solve_io (grid, config_flags)
+                ccall((:med_last_solve_io_, "libwrf"), Cvoid, (Ptr{domain}, Ptr{Cvoid}), grid, config_flags)
             end
-        else
+        #else
          # zip up the tree and see if any ancestor is at its stop time
-            should_do_last_io = domain_clockisstoptime(head_grid)
-            grid_ptr => grid 
-            while grid_ptr % id != 1
-                if domain_clockisstoptime(grid_ptr) 
-                    should_do_last_io = true
-                end
-                grid_ptr => grid_ptr % parents(1) % ptr
-            end
-            if should_do_last_io 
-                grid_ptr => grid 
-                @ccall med_nest_feedback (grid_ptr % parents(1) % ptr, grid, config_flags)
-                if grid % active_this_task 
-                    @ccall med_last_solve_io (grid, config_flags)
-                end
-            end
+        #    should_do_last_io = domain_clockisstoptime(head_grid)
+        #    grid_ptr => grid 
+        #    while grid_ptr % id != 1
+        #        if domain_clockisstoptime(grid_ptr) 
+        #            should_do_last_io = true
+        #        end
+        #        grid_ptr => grid_ptr % parents(1) % ptr
+        #    end
+        #    if should_do_last_io 
+        #        grid_ptr => grid 
+        #        @ccall med_nest_feedback (grid_ptr % parents(1) % ptr, grid, config_flags)
+        #        if grid % active_this_task 
+        #            @ccall med_last_solve_io (grid, config_flags)
+        #        end
+        #    end
         end
     end
 end
-@ccall pop_communicators_for_domain
+ccall((:pop_communicators_for_domain_, "libwrf"), Cvoid, ())
